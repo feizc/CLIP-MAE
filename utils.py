@@ -57,3 +57,22 @@ def get_cc3m_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
 
     return dataloader 
 
+
+
+def reconstruct_loss(target, pred, mask, norm_pix_loss=False): 
+    """
+    imgs: [N, 3, H, W]
+    pred: [N, L, p*p*3]
+    mask: [N, L], 0 is keep, 1 is remove, 
+    """
+    if norm_pix_loss: 
+        mean = target.mean(dim=-1, keep_dim=True) 
+        var = target.var(dim=-1, keepdim=True)
+        target = (target - mean) / (var + 1.e-6)**.5 
+
+    loss = (pred - target) ** 2 
+    loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
+
+    loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
+    return loss
+

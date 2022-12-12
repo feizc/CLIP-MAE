@@ -4,7 +4,7 @@ from torch import optim
 
 from transformers import AutoTokenizer
 from open_clip import create_transform, CLIPVisionCfg, CLIPTextCfg, ClipLoss
-from mae_clip import MaeClip 
+from open_clip import MaeCLIP
 from utils import get_cc3m_dataset 
 from tqdm import tqdm 
 
@@ -46,7 +46,7 @@ def main():
     preprocess_train, _ = create_transform(image_size=224) 
     device = "cuda:0" if torch.cuda.is_available() else "cpu"  
     tokenizer = AutoTokenizer.from_pretrained('ckpt/tokenizer')
-    model = MaeClip(embed_dim=768, vision_cfg=CLIPVisionCfg(), text_cfg=CLIPTextCfg()) 
+    model = MaeCLIP(embed_dim=768, vision_cfg=CLIPVisionCfg(), text_cfg=CLIPTextCfg()) 
 
     # create optimizer and scaler
     exclude = lambda n, p: p.ndim < 2 or "bn" in n or "ln" in n or "bias" in n or 'logit_scale' in n
@@ -84,9 +84,6 @@ def main():
             optimizer.zero_grad()
             loss_cum += total_loss.item() 
             progress.set_postfix({"loss": loss_cum / (i + 1)})
-
-
-
 
 
 if __name__ == "__main__":
