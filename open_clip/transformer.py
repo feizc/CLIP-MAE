@@ -10,6 +10,7 @@ from torch.utils.checkpoint import checkpoint
 from .utils import to_2tuple
 
 
+
 class LayerNormFp32(nn.LayerNorm):
     """Subclass torch's LayerNorm to handle fp16 (by casting to float32 and back)."""
 
@@ -350,6 +351,7 @@ class VisionTransformer(nn.Module):
         return x
 
 
+
 class TextTransformer(nn.Module):
 
     def __init__(
@@ -432,6 +434,77 @@ class TextTransformer(nn.Module):
 
         return x
 
+
+
+class MaskedViTDecoder(nn.Module): 
+    def __init__(
+        self,
+        image_size=224,
+        patch_size=16,
+        width=512,
+        layers=8,
+        heads=16,
+        mlp_ratio=4.,
+        encoder_width=768,
+        ls_init_value: float = None,
+        act_layer: Callable = nn.GELU,
+        norm_layer: Callable = LayerNorm,
+    ):
+        super().__init__()
+        self.image_size = to_2tuple(image_size)
+        self.patch_size = to_2tuple(patch_size)
+        self.grid_size = (self.image_size[0] // self.patch_size[0], self.image_size[1] // self.patch_size[1])
+        
+        # patch embedding
+        self.decoder_embed = nn.Linear(encoder_width, width) 
+        scale = width ** -0.5
+        self.positional_embedding = nn.Parameter(scale * torch.randn(self.grid_size[0] * self.grid_size[1] + 1, width)) 
+
+        self.transformer = Transformer(
+            width,
+            layers,
+            heads,
+            mlp_ratio,
+            ls_init_value=ls_init_value,
+            act_layer=act_layer,
+            norm_layer=norm_layer,
+        )
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, width)) 
+        self.ln_post = norm_layer(width) 
+        self.decoder_pred = nn.Linear(width, patch_size**2 * 3, bias=True) 
+        self.text_project = nn.Linear(encoder_width, width, bias=False) 
+    
+
+    def forward(
+        self,
+        x,
+        ids_restore,
+        text_emb=None,
+    ):
+        # embed tokens
+        x = self.decoder_embed(x) 
+        # append mask tokens to sequence
+        mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
+        x_ = torch.cat([x[:, 1:, :], mask_tokens], dim=1)  # no cls token
+        x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))  # unshuffle
+        x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
+        # add pos embed
+        x = x + self.positional_embedding
+
+        text_len = text_emb.size(1)
+        x = torch.cat([x, self.text_project(text_emb)], dim=1) 
+
+        # apply transformer blocks
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = self.transformer(x)
+        x = x.permute(1, 0, 2)  # LND -> NLD 
+
+        x = self.ln_post(x) 
+        x = self.decoder_pred(x) 
+
+        # remove cls token 
+        x = x[:, 1:-text_len, :] 
+        return x 
 
 
 
@@ -533,6 +606,65 @@ class MaskedVisionTransformer(nn.Module):
     def set_grad_checkpointing(self, enable=True):
         self.transformer.grad_checkpointing = enable
 
+
+    def patchify(self, imgs):
+        """
+        imgs: (N, 3, H, W)
+        x: (N, L, patch_size**2 *3)
+        """
+        p = self.patch_size[0]
+        assert imgs.shape[2] == imgs.shape[3] and imgs.shape[2] % p == 0
+
+        h = w = imgs.shape[2] // p
+        x = imgs.reshape(shape=(imgs.shape[0], 3, h, p, w, p))
+        x = torch.einsum('nchpwq->nhwpqc', x)
+        x = x.reshape(shape=(imgs.shape[0], h * w, p**2 * 3))
+        return x
+
+
+    def unpatchify(self, x):
+        """
+        x: (N, L, patch_size**2 *3)
+        imgs: (N, 3, H, W)
+        """
+        p = self.patch_size[0]
+        h = w = int(x.shape[1]**.5)
+        assert h * w == x.shape[1]
+        
+        x = x.reshape(shape=(x.shape[0], h, w, p, p, 3))
+        x = torch.einsum('nhwpqc->nchpwq', x)
+        imgs = x.reshape(shape=(x.shape[0], 3, h * p, h * p))
+        return imgs 
+
+    
+    def random_masking(self, x, mask_ratio):
+        """
+        Perform per-sample random masking by per-sample shuffling.
+        Per-sample shuffling is done by argsort random noise.
+        x: [N, L, D], sequence
+        """
+        N, L, D = x.shape  # batch, length, dim
+        len_keep = int(L * (1 - mask_ratio))
+        
+        noise = torch.rand(N, L, device=x.device)  # noise in [0, 1]
+        
+        # sort noise for each sample
+        ids_shuffle = torch.argsort(noise, dim=1)  # ascend: small is keep, large is remove
+        ids_restore = torch.argsort(ids_shuffle, dim=1)
+
+        # keep the first subset
+        ids_keep = ids_shuffle[:, :len_keep]
+        x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D))
+
+        # generate the binary mask: 0 is keep, 1 is remove
+        mask = torch.ones([N, L], device=x.device)
+        mask[:, :len_keep] = 0
+        # unshuffle to get the binary mask
+        mask = torch.gather(mask, dim=1, index=ids_restore)
+
+        return x_masked, mask, ids_restore
+
+
     def forward(self, x: torch.Tensor):
         x = self.conv1(x)  # shape = [*, width, grid, grid]
         x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
@@ -553,3 +685,27 @@ class MaskedVisionTransformer(nn.Module):
             x = x @ self.proj
 
         return x
+
+
+    def forward_with_mask(self, x, mask_ratio):
+        # embed patches 
+        x = self.conv1(x)  # shape = [*, width, grid, grid]
+        x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
+        x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width] (bsz, 196, d_model) 
+        x = x + self.positional_embedding[1:].to(x.dtype) 
+
+        # masking: length -> length * mask_ratio (bsz, seq_len', d_model)
+        x, mask, ids_restore = self.random_masking(x, mask_ratio) 
+        
+        # append cls token 
+        cls_token = self.class_embedding + self.positional_embedding[:1, ] 
+        cls_token = cls_token.unsqueeze(0)
+        cls_token = cls_token.expand(x.shape[0], -1, -1)
+
+        x = torch.cat((cls_token, x), dim=1) # (bsz, seq_len'+1, d_model) 
+        
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = self.transformer(x)
+        x = x.permute(1, 0, 2)  # LND -> NLD
+        
+        return x, mask, ids_restore  
