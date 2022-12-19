@@ -492,6 +492,7 @@ class MaskedViTDecoder(nn.Module):
         x = x + self.positional_embedding
 
         text_len = text_emb.size(1)
+        # print(x.size(), text_emb.size())
         x = torch.cat([x, self.text_project(text_emb)], dim=1) 
 
         # apply transformer blocks
@@ -687,7 +688,7 @@ class MaskedVisionTransformer(nn.Module):
         return x
 
 
-    def forward_with_mask(self, x, mask_ratio):
+    def forward_with_mask(self, x, mask_ratio=0.5):
         # embed patches 
         x = self.conv1(x)  # shape = [*, width, grid, grid]
         x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
@@ -702,10 +703,14 @@ class MaskedVisionTransformer(nn.Module):
         cls_token = cls_token.unsqueeze(0)
         cls_token = cls_token.expand(x.shape[0], -1, -1)
 
-        x = torch.cat((cls_token, x), dim=1) # (bsz, seq_len'+1, d_model) 
+        x = torch.cat((cls_token, x), dim=1) # (bsz, seq_len+1, d_model) 
         
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
-        x = x.permute(1, 0, 2)  # LND -> NLD
-        
-        return x, mask, ids_restore  
+        x = x.permute(1, 0, 2)  # LND -> NLD 
+
+        image_features = self.ln_post(x[:, 0, :])
+        if self.proj is not None:
+            image_features = image_features @ self.proj
+
+        return x, mask, ids_restore, F.normalize(image_features, dim=-1)
