@@ -5,8 +5,11 @@ from torch import optim
 from transformers import AutoTokenizer
 from open_clip import create_transform, CLIPVisionCfg, CLIPTextCfg, ClipLoss
 from open_clip import MaeCLIP
-from utils import get_cc3m_dataset 
+from utils import get_cc3m_dataset, reconstruct_loss 
+
 from tqdm import tqdm 
+
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -27,6 +30,9 @@ def parse_args():
     parser.add_argument(
         "--batch-size", type=int, default=64, help="Batch size per GPU."
     )
+    parser.add_argument("--mae_loss", type=bool, default=False)
+    parser.add_argument("--debug", type=bool, default=True) 
+
     args = parser.parse_args()
     return args 
 
@@ -43,10 +49,11 @@ def main():
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.deterministic = False
 
-    preprocess_train, _ = create_transform(image_size=224) 
+    preprocess_train, preprocess_val = create_transform(image_size=224) 
     device = "cuda:0" if torch.cuda.is_available() else "cpu"  
     tokenizer = AutoTokenizer.from_pretrained('ckpt/tokenizer')
     model = MaeCLIP(embed_dim=768, vision_cfg=CLIPVisionCfg(), text_cfg=CLIPTextCfg()) 
+    model = model.to(device)
 
     # create optimizer and scaler
     exclude = lambda n, p: p.ndim < 2 or "bn" in n or "ln" in n or "bias" in n or 'logit_scale' in n
@@ -67,23 +74,55 @@ def main():
     )
 
     train_loader = get_cc3m_dataset(args, preprocess_train, is_train=True, tokenizer=tokenizer) 
+    val_loader = get_cc3m_dataset(args, preprocess_val, is_train=False, tokenizer=tokenizer)
 
-    for epoch in range(5): 
+    for epoch in range(20): 
         model.train() 
-        loss = ClipLoss() 
+        clip_loss = ClipLoss() 
         loss_cum = .0 
-        progress = tqdm(total=len(train_loader), desc='clip training') 
+        progress = tqdm(total=len(train_loader), desc='mae-clip training') 
         for i, batch in enumerate(train_loader):  
-            images = images.to(device=device, non_blocking=True)
-            texts = texts.to(device=device, non_blocking=True)
+            images, texts = batch 
+            images = images.to(device=device)
+            texts = texts.to(device=device)
 
-            image_features, text_features, logit_scale = model(images, texts)
-            total_loss = loss(image_features, text_features, logit_scale) 
+            x, mask, ids_restore, image_features = model.visual.forward_with_mask(images, mask_ratio=0.5) 
+            text_features = model.encode_text(texts, normalize=True)
+            pred = model.decoder(x, ids_restore, text_emb=text_features.unsqueeze(1))
+            if args.mae_loss == True: 
+                rec_loss = reconstruct_loss(model.visual.patchify(images), pred, mask)
+                total_loss = rec_loss + clip_loss(image_features, text_features, model.logit_scale.exp()) 
+            else:
+                total_loss = clip_loss(image_features, text_features, model.logit_scale.exp()) 
             total_loss.backward() 
             optimizer.step() 
             optimizer.zero_grad()
             loss_cum += total_loss.item() 
             progress.set_postfix({"loss": loss_cum / (i + 1)})
+            if args.debug == True:
+                break 
+
+        model.eval() 
+        with torch.no_grad(): 
+            progress = tqdm(total=len(val_loader), desc='mae-clip evaluation') 
+            acc_cum = .0
+            for i, batch in enumerate(val_loader):
+                images, texts = batch 
+                images = images.to(device=device)
+                texts = texts.to(device=device) 
+
+                image_features, text_features, logit_scale = model(images, texts) 
+                logits = torch.matmul(text_features, image_features.t()) * logit_scale 
+                pred = torch.argmax(logits, dim=-1) 
+                accuracy = torch.eq(pred, torch.arange(len(logits), device=logits.device)).sum() / len(logits)
+                acc_cum += accuracy.item() 
+                progress.set_postfix({"accuracy": acc_cum / (i + 1)})
+                if args.debug == True:
+                    break 
+
+
+
+
 
 
 if __name__ == "__main__":

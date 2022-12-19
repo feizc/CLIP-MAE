@@ -2,16 +2,22 @@ import os
 import json 
 from PIL import Image 
 
+import torch 
 from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler, IterableDataset, get_worker_info
 from torch.utils.data.distributed import DistributedSampler
 
 
 
 class CC3MDataset(Dataset):
-    def __init__(self, input_filename, transforms, tokenizer=None):
+    def __init__(self, input_filename, transforms, tokenizer=None, is_train=True):
         train_json_path = os.path.join(input_filename, 'train.json')
         with open(train_json_path, 'r', encoding='utf-8') as f: 
             self.data = json.load(f)
+
+        if is_train == True: 
+            self.data = self.data[:-50000]
+        else:
+            self.data = self.data[-50000:]
 
         self.input_filename = input_filename 
 
@@ -26,27 +32,38 @@ class CC3MDataset(Dataset):
     def __getitem__(self, idx):
         images_path = os.path.join(self.input_filename, self.data[idx]['image'][6:])
         images = self.transforms(Image.open(images_path))
-        texts = self.tokenize([str(self.captions[idx]['caption'])])[0]
-        return images, texts
+        texts = self.tokenize(self.data[idx]['caption'],
+                                padding="max_length",
+                                max_length=77,
+                                truncation=True,
+                                return_tensors="pt",)
+        return images, texts['input_ids'].squeeze(0)
 
 
 
-def get_cc3m_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
-    input_filename = args.train_data if is_train else args.val_data
+def get_cc3m_dataset(args, preprocess_fn, is_train, tokenizer=None):
+    input_filename = args.train_data 
     assert input_filename
+    
     dataset = CC3MDataset(
         input_filename,
         preprocess_fn,
-		tokenizer=tokenizer)
+		tokenizer=tokenizer,
+        is_train=is_train)
+    
     num_samples = len(dataset) 
     print(num_samples)
-    sampler = DistributedSampler(dataset) if args.distributed and is_train else None
-    shuffle = is_train and sampler is None
+
+    if is_train == True:
+        #sampler = torch.utils.data.sampler.RandomSampler(dataset)
+        sampler = None
+    else:
+        sampler = torch.utils.data.sampler.SequentialSampler(dataset)
 
     dataloader = DataLoader(
         dataset,
-        batch_size=args.batch_size,
-        shuffle=shuffle,
+        batch_size=args.batch_size if is_train else 10,
+        shuffle=is_train,
         num_workers=args.workers,
         pin_memory=True,
         sampler=sampler,
