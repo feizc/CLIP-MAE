@@ -5,9 +5,11 @@ from torch import optim
 from transformers import AutoTokenizer
 from open_clip import create_transform, CLIPVisionCfg, CLIPTextCfg, ClipLoss
 from open_clip import MaeCLIP
-from utils import get_cc3m_dataset, reconstruct_loss 
+from utils import get_cc3m_dataset, reconstruct_loss, get_imagenet_dataset 
 
+from utils import zero_shot_classifier, zero_shot_run
 from tqdm import tqdm 
+from training import imagenet_classnames, openai_imagenet_template 
 
 
 
@@ -18,6 +20,12 @@ def parse_args():
         type=str,
         default='/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mtcv/mayuchen/datasets/research/conceptual_captions',
         help="Path to file(s) with training data",
+    )
+    parser.add_argument(
+        "--imagenet",
+        type=str,
+        default='/mnt/dolphinfs/hdd_pool/docker/user/hadoop-mtcv/fanmingyuan/cephfs_bk/data/ILSVRC2012',
+        help="Path to imagenet data for zero-shot accuracy",
     )
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate.")
     parser.add_argument("--beta1", type=float, default=0.98, help="Adam beta 1.")
@@ -75,6 +83,7 @@ def main():
 
     train_loader = get_cc3m_dataset(args, preprocess_train, is_train=True, tokenizer=tokenizer) 
     val_loader = get_cc3m_dataset(args, preprocess_val, is_train=False, tokenizer=tokenizer)
+    imagenet_loader = get_imagenet_dataset(args, preprocess_val, is_train=False)
 
     for epoch in range(20): 
         model.train() 
@@ -119,10 +128,15 @@ def main():
                 progress.set_postfix({"accuracy": acc_cum / (i + 1)})
                 if args.debug == True:
                     break 
-
-
-
-
+        
+        # zero-shot for imagenet accuracy
+        print('building zero-shot classifier')
+        classifier = zero_shot_classifier(model, imagenet_classnames, openai_imagenet_template, tokenizer, device)
+        acc1, _ = zero_shot_run(model, classifier, imagenet_loader, device)
+        print('acc1: ', acc1) 
+        
+        print('save modeling')
+        torch.save(model.state_dict(), './ckpt/' + str(epoch) + '.pt') 
 
 
 if __name__ == "__main__":

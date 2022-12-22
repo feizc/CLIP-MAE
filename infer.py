@@ -7,7 +7,7 @@ from utils import reconstruct_loss
 
 
 model = MaeCLIP(embed_dim=768, vision_cfg=CLIPVisionCfg, text_cfg=CLIPTextCfg)
-# print(model.visual)
+model.load_state_dict(torch.load('./ckpt/0.pt', map_location='cpu'))
 
 tokenizer = AutoTokenizer.from_pretrained('ckpt/tokenizer')
 image = torch.randn((1, 3, 224, 224)) 
