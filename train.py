@@ -11,6 +11,8 @@ from utils import zero_shot_classifier, zero_shot_run
 from tqdm import tqdm 
 from training import imagenet_classnames, openai_imagenet_template 
 
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 def parse_args():
@@ -38,8 +40,8 @@ def parse_args():
     parser.add_argument(
         "--batch-size", type=int, default=64, help="Batch size per GPU."
     )
-    parser.add_argument("--mae_loss", type=bool, default=False)
-    parser.add_argument("--debug", type=bool, default=True) 
+    parser.add_argument("--mae_loss", type=bool, default=True)
+    parser.add_argument("--debug", type=bool, default=False) 
 
     args = parser.parse_args()
     return args 
@@ -108,6 +110,7 @@ def main():
             optimizer.zero_grad()
             loss_cum += total_loss.item() 
             progress.set_postfix({"loss": loss_cum / (i + 1)})
+            progress.update()
             if args.debug == True:
                 break 
 
@@ -126,6 +129,7 @@ def main():
                 accuracy = torch.eq(pred, torch.arange(len(logits), device=logits.device)).sum() / len(logits)
                 acc_cum += accuracy.item() 
                 progress.set_postfix({"accuracy": acc_cum / (i + 1)})
+                progress.update()
                 if args.debug == True:
                     break 
         
@@ -135,8 +139,9 @@ def main():
         acc1, _ = zero_shot_run(model, classifier, imagenet_loader, device)
         print('acc1: ', acc1) 
         
-        print('save modeling')
-        torch.save(model.state_dict(), './ckpt/' + str(epoch) + '.pt') 
+        if args.mae_loss == True:
+            print('save modeling')
+            torch.save(model.state_dict(), './ckpt/' + str(epoch) + '.pt') 
 
 
 if __name__ == "__main__":

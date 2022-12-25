@@ -15,7 +15,7 @@ text = 'a cat on grass'
 text_id = tokenizer(text, padding="max_length", max_length=77, truncation=True, return_tensors="pt",)
 text_emb = model.encode_text(text_id['input_ids'], normalize=False).unsqueeze(1) # (1, 768) 
 
-x, mask, ids_restore = model.visual.forward_with_mask(image, mask_ratio=0.7) 
+x, mask, ids_restore, _ = model.visual.forward_with_mask(image, mask_ratio=0.7) 
 pred = model.decoder(x, ids_restore, text_emb=text_emb)
 # print(pred.size(), mask.size()) 
 

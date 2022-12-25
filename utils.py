@@ -15,7 +15,8 @@ def zero_shot_classifier(model, classnames, templates, tokenizer, device):
         zeroshot_weights = []
         for classname in tqdm(classnames):
             texts = [template(classname) for template in templates]  # format with class
-            texts = tokenizer(texts).to(device)  # tokenize
+            texts = tokenizer(texts, padding="max_length", max_length=77, truncation=True, return_tensors="pt")  # tokenize
+            texts = texts['input_ids'].to(device)
             class_embeddings = model.encode_text(texts)
             class_embedding = F.normalize(class_embeddings, dim=-1).mean(dim=0)
             class_embedding /= class_embedding.norm()
@@ -40,6 +41,7 @@ def zero_shot_run(model, classifier, dataloader, device):
             top5 += acc5
             n += images.size(0) 
             progress.set_postfix({"acc-1": top1 / n, "acc-5": top5 / n})
+            progress.update()
     top1 = (top1 / n)
     top5 = (top5 / n)
     return top1, top5 
