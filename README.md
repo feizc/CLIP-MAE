@@ -1,7 +1,7 @@
 # Text-Guided Masked Autoencoders for Language-Image Pre-training
 
 
-## Framework 
+## 1. Framework 
 
 Overall, we first mask the image, then feed into the image encoder and text encoder to get image and texr features. Next, the text features is used to guid the image mask reconstruction. Finally, we combine the clip loss and reconstruction loss to optimize the model. 
 
@@ -23,7 +23,7 @@ We train on the CC-3M dataset and report the performance about retrieval R1@10 a
 | ACC-1 |12.5 | 13.3|
 
 
-## Training
+## 2. Training
 
 Run `python train.py` with the corresponding arguments. 
 To reproduce the results reported in the table, download the checkpoint model file and put it to CKPT file.
