@@ -15,7 +15,7 @@ Overall, we first mask the image, then feed into the image encoder and text enco
 
 ## Results
 
-We train on the CC-3M dataset and report the performance about retrieval R1@10 and ImageNet zero-shot accuracy compared without reconstruction loss. 
+We train on the Conceptual Captions dataset and report the performance about retrieval R1@10 and ImageNet zero-shot accuracy compared without reconstruction loss. 
 
 | Metric | CLIP-MAE | CLIP-MAE + reconstruct |
 |------|------|-----|
